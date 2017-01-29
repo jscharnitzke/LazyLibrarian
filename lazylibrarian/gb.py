@@ -605,24 +605,27 @@ class GoogleBooks:
             logger.debug('[%s] The Google Books API was hit %s time%s to populate book list' %
                          (authorname, api_hits, plural(api_hits)))
 
-            lastbook = myDB.match('SELECT BookName, BookLink, BookDate from books WHERE AuthorID="%s" \
+            lastbook = myDB.match('SELECT BookName, BookLink, BookDate, BookImg from books WHERE AuthorID="%s" \
                                AND Status != "Ignored" order by BookDate DESC' % authorid)
 
             if lastbook:  # maybe there are no books [remaining] for this author
                 lastbookname = lastbook['BookName']
                 lastbooklink = lastbook['BookLink']
                 lastbookdate = lastbook['BookDate']
+                lastbookimg = lastbook['BookImg']
             else:
                 lastbookname = None
                 lastbooklink = None
                 lastbookdate = None
+                lastbookimg = None
 
             controlValueDict = {"AuthorID": authorid}
             newValueDict = {
                 "Status": "Active",
                 "LastBook": lastbookname,
                 "LastLink": lastbooklink,
-                "LastDate": lastbookdate
+                "LastDate": lastbookdate,
+                "LastBookImg": lastbookimg
             }
 
             myDB.upsert("authors", newValueDict, controlValueDict)
@@ -637,9 +640,8 @@ class GoogleBooks:
             logger.debug("Imported/Updated %s book%s for author" % (resultcount, plural(resultcount)))
 
             myDB.action('insert into stats values ("%s", %i, %i, %i, %i, %i, %i, %i, %i, %i)' %
-                        (
-                        authorname.replace('"', '""'), api_hits, gr_lang_hits, lt_lang_hits, gb_lang_change, cache_hits,
-                        ignored, removedResults, not_cached, duplicates))
+                        (authorname.replace('"', '""'), api_hits, gr_lang_hits, lt_lang_hits, gb_lang_change,
+                         cache_hits, ignored, removedResults, not_cached, duplicates))
 
             if refresh:
                 logger.info("[%s] Book processing complete: Added %s book%s / Updated %s book%s" %

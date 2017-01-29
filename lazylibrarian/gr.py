@@ -200,6 +200,7 @@ class GoodReads:
                 authorlist = self.get_author_info(authorid, authorname)
         return authorlist
 
+
     def get_author_info(self, authorid=None, authorname=None):
 
         URL = 'http://www.goodreads.com/author/show/' + authorid + '.xml?' + urllib.urlencode(self.params)
@@ -220,8 +221,8 @@ class GoodReads:
             logger.warn('No author found with ID: ' + authorid)
         else:
             logger.debug("[%s] Processing info for authorID: %s" % (authorname, authorid))
-
             # PAB added authorname to author_dict - this holds the intact name preferred by GR
+            authorname = resultxml[1].text
             author_dict = {
                 'authorid': resultxml[0].text,
                 'authorlink': resultxml.find('link').text,
@@ -617,23 +618,26 @@ class GoodReads:
                         if all(False for book in resultxml):  # returns True if iterator is empty
                             resultxml = None
 
-            lastbook = myDB.match('SELECT BookName, BookLink, BookDate from books WHERE AuthorID="%s" \
+            lastbook = myDB.match('SELECT BookName, BookLink, BookDate, BookImg from books WHERE AuthorID="%s" \
                                 AND Status != "Ignored" order by BookDate DESC' % authorid)
             if lastbook:
                 lastbookname = lastbook['BookName']
                 lastbooklink = lastbook['BookLink']
                 lastbookdate = lastbook['BookDate']
+                lastbookimg = lastbook['BookImg']
             else:
                 lastbookname = None
                 lastbooklink = None
                 lastbookdate = None
+                lastbookimg = None
 
             controlValueDict = {"AuthorID": authorid}
             newValueDict = {
                 "Status": "Active",
                 "LastBook": lastbookname,
                 "LastLink": lastbooklink,
-                "LastDate": lastbookdate
+                "LastDate": lastbookdate,
+                "LastBookImg": lastbookimg
             }
             myDB.upsert("authors", newValueDict, controlValueDict)
 

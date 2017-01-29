@@ -22,13 +22,13 @@ from lazylibrarian import logger, database
 from lazylibrarian.bookwork import setWorkPages, getBookCovers, getWorkSeries, getWorkPage, \
     getBookCover, getAuthorImage, getAuthorImages
 from lazylibrarian.common import clearLog, cleanCache, restartJobs, showJobs, checkRunningJobs
-from lazylibrarian.csv import import_CSV, export_CSV
+from lazylibrarian.csvfile import import_CSV, export_CSV
 from lazylibrarian.formatter import today
 from lazylibrarian.gb import GoogleBooks
 from lazylibrarian.gr import GoodReads
 from lazylibrarian.importer import addAuthorToDB, update_totals
 from lazylibrarian.librarysync import LibraryScan
-from lazylibrarian.magazinescan import magazineScan
+from lazylibrarian.magazinescan import magazineScan, create_covers
 from lazylibrarian.postprocess import processDir, processAlternate
 from lazylibrarian.searchmag import search_magazines
 from lazylibrarian.searchnzb import search_nzb_book
@@ -50,6 +50,7 @@ cmd_dict = {'help': 'list available commands. ' +
             'clearLogs': 'clear current log',
             'getMagazines': 'list magazines',
             'getIssues': '&name= list issues of named magazine',
+            'createMagCovers': '[&wait] [&refresh] create covers for magazines, optionally refresh existing ones',
             'forceMagSearch': '[&wait] search for all wanted magazines',
             'forceBookSearch': '[&wait] search for all wanted books',
             'forceProcess': 'process books/mags in download dir',
@@ -70,6 +71,7 @@ cmd_dict = {'help': 'list available commands. ' +
             'moveBooks': '&fromname= &toname= move all books from one author to another by AuthorName',
             'moveBook': '&id= &toid= move one book to new author by BookID and AuthorID',
             'addAuthor': '&name= add author to database by name',
+            'addAuthorID': '&id= add author to database by AuthorID',
             'removeAuthor': '&id= remove author from database by AuthorID',
             'addMagazine': '&name= add magazine to database by name',
             'removeMagazine': '&name= remove magazine and all of its issues from database by name',
@@ -260,6 +262,17 @@ class Api(object):
 
         self.data = {'magazine': magazine, 'issues': issues}
 
+    def _createMagCovers(self, **kwargs):
+        if 'refresh' in kwargs:
+            refresh=True
+        else:
+            refresh=False
+        if 'wait' in kwargs:
+            create_covers(refresh=refresh)
+        else:
+            threading.Thread(target=create_covers, name='API-MAGCOVERS', args=[refresh]).start()
+
+
     def _getBook(self, **kwargs):
         if 'id' not in kwargs:
             self.data = 'Missing parameter: id'
@@ -267,8 +280,7 @@ class Api(object):
         else:
             self.id = kwargs['id']
 
-        book = self._dic_from_query(
-            'SELECT * from books WHERE BookID="' + self.id + '"')
+        book = self._dic_from_query('SELECT * from books WHERE BookID="' + self.id + '"')
         self.data = {'book': book}
 
     def _queueBook(self, **kwargs):
@@ -601,7 +613,18 @@ class Api(object):
         else:
             self.id = kwargs['name']
         try:
-            addAuthorToDB(self.id, refresh=False)
+            addAuthorToDB(authorname=self.id, refresh=False)
+        except Exception as e:
+            self.data = str(e)
+
+    def _addAuthorID(self, **kwargs):
+        if 'id' not in kwargs:
+            self.data = 'Missing parameter: id'
+            return
+        else:
+            self.id = kwargs['id']
+        try:
+            addAuthorToDB(authorname='', refresh=False, authorid=self.id)
         except Exception as e:
             self.data = str(e)
 

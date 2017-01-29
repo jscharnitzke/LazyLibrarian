@@ -29,7 +29,7 @@ from cherrypy.lib.static import serve_file
 from lazylibrarian import logger, database, notifiers, versioncheck, magazinescan, \
     qbittorrent, utorrent, rtorrent, transmission, sabnzbd, nzbget, deluge, synology
 from lazylibrarian.common import showJobs, restartJobs, clearLog, scheduleJob, checkRunningJobs, setperm
-from lazylibrarian.csv import import_CSV, export_CSV
+from lazylibrarian.csvfile import import_CSV, export_CSV
 from lazylibrarian.formatter import plural, now, today, check_int, replace_all, safe_unicode
 from lazylibrarian.gb import GoogleBooks
 from lazylibrarian.gr import GoodReads
@@ -65,20 +65,23 @@ def serve_template(templatename, **kwargs):
 
 
 class WebInterface(object):
+
     @cherrypy.expose
     def index(self):
-        if lazylibrarian.db_needs_upgrade():
-            message = "Upgrading database, please wait"
-            return serve_template(templatename="dbupdate.html", title="Database Upgrade", message=message, timer=5)
-        else:
-            raise cherrypy.HTTPRedirect("home")
+        raise cherrypy.HTTPRedirect("home")
+
 
     @cherrypy.expose
     def home(self):
-        myDB = database.DBConnection()
-        authors = myDB.select(
-            'SELECT * from authors where Status != "Ignored" order by AuthorName COLLATE NOCASE')
-        return serve_template(templatename="index.html", title="Home", authors=authors)
+        if lazylibrarian.UPDATE_MSG:
+            message = "Upgrading database, please wait"
+            return serve_template(templatename="dbupdate.html", title="Database Upgrade", message=message, timer=5)
+        else:
+            myDB = database.DBConnection()
+            authors = myDB.select(
+                'SELECT * from authors where Status != "Ignored" order by AuthorName COLLATE NOCASE')
+            return serve_template(templatename="index.html", title="Home", authors=authors)
+
 
     @staticmethod
     def label_thread():
@@ -86,7 +89,7 @@ class WebInterface(object):
         if "Thread-" in threadname:
             threading.currentThread().name = "WEBSERVER"
 
-        # CONFIG ############################################################
+    # CONFIG ############################################################
 
     @cherrypy.expose
     def config(self):
@@ -145,9 +148,9 @@ class WebInterface(object):
             reject_magsize=0, extra=0, extra_host='', gen=0, gen_host='', lime=0, lime_host='', book_api='',
             gr_api='', gb_api='', versioncheck_interval='', search_interval='', scan_interval='',
             searchrss_interval=20, ebook_dest_folder='', ebook_dest_file='', tor_downloader_rtorrent=0,
-            keep_seeding=0, rtorrent_host='', rtorrent_dir='', rtorrent_user='', rtorrent_pass='',
+            keep_seeding=0, prefer_magnet=0, rtorrent_host='', rtorrent_dir='', rtorrent_user='', rtorrent_pass='',
             rtorrent_label='', use_twitter=0, twitter_notify_onsnatch=0, twitter_notify_ondownload=0,
-            mag_age=0, mag_dest_folder='', mag_dest_file='', mag_relative=0, cache_age=30, task_age=0,
+            mag_age=0, mag_dest_folder='', mag_dest_file='', mag_relative=0, mag_single=0, cache_age=30, task_age=0,
             utorrent_host='', utorrent_port=0, utorrent_user='', utorrent_pass='', utorrent_label='',
             qbittorrent_host='', qbittorrent_port=0, qbittorrent_user='', qbittorrent_pass='',
             qbittorrent_label='', notfound_status='Skipped', newbook_status='Skipped', full_scan=0,
@@ -238,6 +241,7 @@ class WebInterface(object):
         lazylibrarian.TORRENT_DIR = torrent_dir
         lazylibrarian.NUMBEROFSEEDERS = check_int(numberofseeders, 0)
         lazylibrarian.KEEP_SEEDING = bool(keep_seeding)
+        lazylibrarian.PREFER_MAGNET = bool(prefer_magnet)
         lazylibrarian.TOR_DOWNLOADER_BLACKHOLE = bool(tor_downloader_blackhole)
         lazylibrarian.TOR_CONVERT_MAGNET = bool(tor_convert_magnet)
         lazylibrarian.TOR_DOWNLOADER_UTORRENT = bool(tor_downloader_utorrent)
@@ -328,6 +332,7 @@ class WebInterface(object):
         lazylibrarian.MAG_DEST_FOLDER = mag_dest_folder
         lazylibrarian.MAG_DEST_FILE = mag_dest_file
         lazylibrarian.MAG_RELATIVE = bool(mag_relative)
+        lazylibrarian.MAG_SINGLE = bool(mag_single)
 
         lazylibrarian.USE_TWITTER = bool(use_twitter)
         lazylibrarian.TWITTER_NOTIFY_ONSNATCH = bool(twitter_notify_onsnatch)
@@ -645,8 +650,7 @@ class WebInterface(object):
         myDB = database.DBConnection()
         authorsearch = myDB.match('SELECT AuthorName from authors WHERE AuthorID="%s"' % AuthorID)
         if authorsearch:  # to stop error if try to refresh an author while they are still loading
-            AuthorName = authorsearch['AuthorName']
-            threading.Thread(target=addAuthorToDB, name='REFRESHAUTHOR', args=[AuthorName, True]).start()
+            threading.Thread(target=addAuthorToDB, name='REFRESHAUTHOR', args=[None, True, AuthorID]).start()
             raise cherrypy.HTTPRedirect("authorPage?AuthorID=%s" % AuthorID)
         else:
             logger.debug('refreshAuthor Invalid authorid [%s]' % AuthorID)
@@ -686,8 +690,14 @@ class WebInterface(object):
         threading.Thread(target=addAuthorToDB, name='ADDAUTHOR', args=[AuthorName, False]).start()
         raise cherrypy.HTTPRedirect("home")
 
+    @cherrypy.expose
+    def addAuthorID(self, AuthorID, AuthorName):
+        threading.Thread(target=addAuthorToDB, name='ADDAUTHOR', args=[AuthorName, False, AuthorID]).start()
+        raise cherrypy.HTTPRedirect("home")
+
     # BOOKS #############################################################
     LANGFILTER = ''
+
     @cherrypy.expose
     def books(self, BookLang=None):
         global LANGFILTER
@@ -699,6 +709,7 @@ class WebInterface(object):
 
     @cherrypy.expose
     def getBooks(self, iDisplayStart=0, iDisplayLength=100, iSortCol_0=0, sSortDir_0="desc", sSearch="", **kwargs):
+        # kwargs is used by datatables to pass params
         global LANGFILTER
         myDB = database.DBConnection()
         iDisplayStart = int(iDisplayStart)
@@ -1138,7 +1149,7 @@ class WebInterface(object):
             raise cherrypy.HTTPRedirect("manage")
 
 
-        # MAGAZINES #########################################################
+    # MAGAZINES #########################################################
 
     @cherrypy.expose
     def magazines(self):
@@ -1146,6 +1157,7 @@ class WebInterface(object):
 
         magazines = myDB.select('SELECT * from magazines ORDER by Title')
         mags = []
+        covercount = 0
         if magazines:
             for mag in magazines:
                 title = mag['Title']
@@ -1155,12 +1167,27 @@ class WebInterface(object):
                     issues = count['counter']
                 else:
                     issues = 0
+                magimg = mag['LatestCover']
+                if not magimg or not os.path.isfile(magimg):
+                    magimg = 'images/nocover.png'
+                else:
+                    myhash = hashlib.md5(magimg).hexdigest()
+                    hashname = os.path.join(lazylibrarian.CACHEDIR, myhash + ".jpg")
+                    copyfile(magimg, hashname)
+                    setperm(hashname)
+                    magimg = 'cache/' + myhash + '.jpg'
+                    covercount += 1
+
                 this_mag = dict(mag)
                 this_mag['Count'] = issues
+                this_mag['Cover'] = magimg
                 this_mag['safetitle'] = urllib.quote_plus(mag['Title'].encode(lazylibrarian.SYS_ENCODING))
                 mags.append(this_mag)
 
-        return serve_template(templatename="magazines.html", title="Magazines", magazines=mags)
+        if lazylibrarian.IMP_CONVERT == 'None':  # special flag to say "no covers required"
+            covercount = 0
+
+        return serve_template(templatename="magazines.html", title="Magazines", magazines=mags, covercount=covercount)
 
     @cherrypy.expose
     def issuePage(self, title):
@@ -1178,14 +1205,11 @@ class WebInterface(object):
                 extn = os.path.splitext(magfile)[1]
                 if extn:
                     magimg = magfile.replace(extn, '.jpg')
-                    if not os.path.isfile(magimg):
+                    if not magimg or not os.path.isfile(magimg):
                         magimg = 'images/nocover.png'
                     else:
                         myhash = hashlib.md5(magimg).hexdigest()
-                        cachedir = lazylibrarian.CACHEDIR
-                        if not os.path.isdir(cachedir):
-                            os.makedirs(cachedir)
-                        hashname = os.path.join(cachedir, myhash + ".jpg")
+                        hashname = os.path.join(lazylibrarian.CACHEDIR, myhash + ".jpg")
                         copyfile(magimg, hashname)
                         setperm(hashname)
                         magimg = 'cache/' + myhash + '.jpg'
@@ -1198,9 +1222,14 @@ class WebInterface(object):
                 this_issue['Cover'] = magimg
                 mod_issues.append(this_issue)
             logger.debug("Found %s cover%s" % (covercount, plural(covercount)))
+
+        if lazylibrarian.IMP_CONVERT == 'None':  # special flag to say "no covers required"
+            covercount = 0
+
         return serve_template(templatename="issues.html", title=title, issues=mod_issues, covercount=covercount)
 
     ISSUEFILTER = ''
+
     @cherrypy.expose
     def pastIssues(self, whichStatus=None):
         global ISSUEFILTER
@@ -1212,6 +1241,7 @@ class WebInterface(object):
 
     @cherrypy.expose
     def getPastIssues(self, iDisplayStart=0, iDisplayLength=100, iSortCol_0=0, sSortDir_0="desc", sSearch="", **kwargs):
+        # kwargs is used by datatables to pass params
         global ISSUEFILTER
         myDB = database.DBConnection()
         iDisplayStart = int(iDisplayStart)
@@ -1277,15 +1307,15 @@ class WebInterface(object):
 
         # or we may just have a title to find magazine in issues table
         mag_data = myDB.select('SELECT * from issues WHERE Title="%s"' % bookid)
-        if len(mag_data) == 0:  # no issues!
+        if len(mag_data) <= 0:  # no issues!
             raise cherrypy.HTTPRedirect("magazines")
-        elif len(mag_data) == 1:  # we only have one issue, get it
+        elif len(mag_data) == 1 and lazylibrarian.MAG_SINGLE:  # we only have one issue, get it
             IssueDate = mag_data[0]["IssueDate"]
             IssueFile = mag_data[0]["IssueFile"]
             logger.info(u'Opening %s - %s' % (bookid, IssueDate))
             return serve_file(IssueFile, "application/x-download", "attachment")
-        elif len(mag_data) > 1:  # multiple issues, show a list
-            logger.debug(u"%s has %s issues" % (bookid, len(mag_data)))
+        else:  # multiple issues, show a list
+            logger.debug(u"%s has %s issue%s" % (bookid, len(mag_data), plural(len(mag_data))))
             raise cherrypy.HTTPRedirect(
                 "issuePage?title=%s" %
                 urllib.quote_plus(bookid.encode(lazylibrarian.SYS_ENCODING)))
@@ -1297,18 +1327,23 @@ class WebInterface(object):
         myDB = database.DBConnection()
         maglist = []
         for nzburl in args:
-            if hasattr(nzburl, 'decode'):
+            if isinstance(nzburl, str):
                 nzburl = nzburl.decode(lazylibrarian.SYS_ENCODING)
             # ouch dirty workaround...
             if not nzburl == 'book_table_length':
-                title = myDB.select('SELECT * from pastissues WHERE NZBurl="%s"' % nzburl)
-                if len(title) == 0:
-                    if '&' in nzburl and not '&amp;' in nzburl:
-                        nzburl = nzburl.replace('&', '&amp;')
-                        title = myDB.select('SELECT * from pastissues WHERE NZBurl="%s"' % nzburl)
-                    elif '&amp;' in nzburl:
-                        nzburl = nzburl.replace('&amp;', '&')
-                        title = myDB.select('SELECT * from pastissues WHERE NZBurl="%s"' % nzburl)
+                # some NZBurl have &amp;  some have just & so need to try both forms
+                if '&' in nzburl and '&amp;' not in nzburl:
+                    nzburl2 = nzburl.replace('&', '&amp;')
+                elif '&amp;' in nzburl:
+                    nzburl2 = nzburl.replace('&amp;', '&')
+                else:
+                    nzburl2 = ''
+
+                if not nzburl2:
+                    title = myDB.select('SELECT * from pastissues WHERE NZBurl="%s"' % nzburl)
+                else:
+                    title = myDB.select('SELECT * from pastissues WHERE NZBurl="%s" OR NZBurl="%s"' %
+                                        (nzburl, nzburl2))
 
                 for item in title:
                     nzburl = item['NZBurl']
@@ -1399,7 +1434,7 @@ class WebInterface(object):
 
         myDB = database.DBConnection()
         for item in args:
-            if hasattr(item, 'decode'):
+            if isinstance(item, str):
                 item = item.decode(lazylibrarian.SYS_ENCODING)
             # ouch dirty workaround...
             if not item == 'book_table_length':
@@ -1409,14 +1444,27 @@ class WebInterface(object):
                     myDB.upsert("magazines", newValueDict, controlValueDict)
                     logger.info(u'Status of magazine %s changed to %s' % (item, action))
                 if action == "Delete":
-                    issue = myDB.match('SELECT IssueFile from issues WHERE Title="%s"' % item)
-                    if issue:
+                    issues = myDB.select('SELECT IssueFile from issues WHERE Title="%s"' % item)
+                    logger.debug(u'Deleting magazine %s from disc' % item)
+                    issuedir = ''
+                    for issue in issues:  # delete all issues of this magazine
                         try:
                             issuedir = os.path.dirname(issue['IssueFile'])
-                            rmtree(os.path.dirname(issuedir), ignore_errors=True)
-                            logger.info(u'Magazine %s deleted from disc' % item)
+                            rmtree(issuedir, ignore_errors=True)
+                            logger.debug(u'Issue directory %s deleted from disc' % issuedir)
                         except Exception as e:
-                            logger.debug('rmtree failed on %s, %s' % (issue['IssueFile'], str(e)))
+                            logger.debug('rmtree failed on %s, %s' % (issuedir, str(e)))
+                    if issuedir:
+                        magdir = os.path.dirname(issuedir)
+                        if not os.listdir(magdir):  # this magazines directory is now empty
+                            try:
+                                rmtree(magdir, ignore_errors=True)
+                                logger.debug(u'Magazine directory %s deleted from disc' % magdir)
+                            except Exception as e:
+                                logger.debug('rmtree failed on %s, %s' % (magdir, str(e)))
+                        else:
+                            logger.debug(u'Magazine directory %s is not empty' % magdir)
+                    logger.info(u'Magazine %s deleted from disc' % item)
                 if action == "Remove" or action == "Delete":
                     myDB.action('DELETE from magazines WHERE Title="%s"' % item)
                     myDB.action('DELETE from pastissues WHERE BookID="%s"' % item)
@@ -1427,6 +1475,7 @@ class WebInterface(object):
                     newValueDict = {
                         "LastAcquired": None,
                         "IssueDate": None,
+                        "LatestCover": None,
                         "IssueStatus": "Wanted"
                     }
                     myDB.upsert("magazines", newValueDict, controlValueDict)
@@ -1471,23 +1520,26 @@ class WebInterface(object):
             # replace any non-ascii quotes/apostrophes with ascii ones eg "Collector's"
             dic = {u'\u2018': u"'", u'\u2019': u"'", u'\u201c': u'"', u'\u201d': u'"'}
             title = replace_all(title, dic)
-
-            controlValueDict = {"Title": title}
-            newValueDict = {
-                "Regex": None,
-                "Reject": reject,
-                "Status": "Active",
-                "MagazineAdded": today(),
-                "IssueStatus": "Wanted"
-            }
-            myDB.upsert("magazines", newValueDict, controlValueDict)
-            mags = [{"bookid": title}]
-            if lazylibrarian.IMP_AUTOSEARCH:
-                self.startMagazineSearch(mags)
+            exists = myDB.match('SELECT Title from magazines WHERE Title="%s" COLLATE NOCASE' % title)
+            if exists:
+                logger.debug("Magazine %s already exists (%s)" % (title, exists['Title']))
+            else:
+                controlValueDict = {"Title": title}
+                newValueDict = {
+                    "Regex": None,
+                    "Reject": reject,
+                    "Status": "Active",
+                    "MagazineAdded": today(),
+                    "IssueStatus": "Wanted"
+                }
+                myDB.upsert("magazines", newValueDict, controlValueDict)
+                mags = [{"bookid": title}]
+                if lazylibrarian.IMP_AUTOSEARCH:
+                    self.startMagazineSearch(mags)
             raise cherrypy.HTTPRedirect("magazines")
 
 
-        # UPDATES ###########################################################
+    # UPDATES ###########################################################
 
     @cherrypy.expose
     def checkForUpdates(self):
@@ -1643,6 +1695,7 @@ class WebInterface(object):
 
     @cherrypy.expose
     def getLog(self, iDisplayStart=0, iDisplayLength=100, iSortCol_0=0, sSortDir_0="desc", sSearch="", **kwargs):
+        # kwargs is used by datatables to pass params
         iDisplayStart = int(iDisplayStart)
         iDisplayLength = int(iDisplayLength)
         lazylibrarian.DISPLAYLENGTH = iDisplayLength
@@ -1735,9 +1788,17 @@ class WebInterface(object):
             return "Test AndroidPN notice failed"
 
     @cherrypy.expose
+    def testBoxcar(self):
+        cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
+        result = notifiers.boxcar_notifier.test_notify()
+        if result:
+            return "Boxcar notification successful,\n%s" % result
+        else:
+            return "Boxcar notification failed"
+
+    @cherrypy.expose
     def testPushbullet(self):
-        cherrypy.response.headers[
-            'Cache-Control'] = "max-age=0,no-cache,no-store"
+        cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
 
         result = notifiers.pushbullet_notifier.test_notify()
         if result:
@@ -1747,8 +1808,7 @@ class WebInterface(object):
 
     @cherrypy.expose
     def testPushover(self):
-        cherrypy.response.headers[
-            'Cache-Control'] = "max-age=0,no-cache,no-store"
+        cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
 
         result = notifiers.pushover_notifier.test_notify()
         if result:
@@ -1758,8 +1818,7 @@ class WebInterface(object):
 
     @cherrypy.expose
     def testNMA(self):
-        cherrypy.response.headers[
-            'Cache-Control'] = "max-age=0,no-cache,no-store"
+        cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
 
         result = notifiers.nma_notifier.test_notify()
         if result:
@@ -1769,8 +1828,7 @@ class WebInterface(object):
 
     @cherrypy.expose
     def testSlack(self):
-        cherrypy.response.headers[
-            'Cache-Control'] = "max-age=0,no-cache,no-store"
+        cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
 
         result = notifiers.slack_notifier.test_notify()
         if result != "ok":
@@ -1780,8 +1838,7 @@ class WebInterface(object):
 
     @cherrypy.expose
     def testEmail(self):
-        cherrypy.response.headers[
-            'Cache-Control'] = "max-age=0,no-cache,no-store"
+        cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
 
         result = notifiers.email_notifier.test_notify()
         if not result:
@@ -1789,7 +1846,7 @@ class WebInterface(object):
         else:
             return "Email notification successful, check your email"
 
-        # API ###############################################################
+    # API ###############################################################
 
     @cherrypy.expose
     def api(self, **kwargs):
@@ -1829,6 +1886,7 @@ class WebInterface(object):
         raise cherrypy.HTTPRedirect(source)
 
     MANAGEFILTER = ''
+
     @cherrypy.expose
     def manage(self, whichStatus=None):
         global MANAGEFILTER
@@ -1840,6 +1898,7 @@ class WebInterface(object):
 
     @cherrypy.expose
     def getManage(self, iDisplayStart=0, iDisplayLength=100, iSortCol_0=0, sSortDir_0="desc", sSearch="", **kwargs):
+        # kwargs is used by datatables to pass params
         global MANAGEFILTER
         myDB = database.DBConnection()
         iDisplayStart = int(iDisplayStart)

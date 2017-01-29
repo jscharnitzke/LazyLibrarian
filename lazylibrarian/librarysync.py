@@ -41,7 +41,7 @@ def get_book_info(fname):
     extn = os.path.splitext(fname)[1]
     if not extn:
         return res
-    # noinspection PyUnreachableCode,PyUnreachableCode
+
     if extn == ".mobi" or extn == ".azw3":
         res['type'] = extn[1:]
         try:
@@ -107,6 +107,10 @@ def get_book_info(fname):
         # sanitize any unmatched html tags or ElementTree won't parse
         dic = {'<br>': '', '</br>': ''}
         txt = replace_all(txt, dic)
+    else:
+        txt = ''
+        logger.error('Unhandled extension in get_book_info: %s' % extn)
+        return res
 
     # repackage epub or opf metadata
     try:
@@ -299,9 +303,8 @@ def LibraryScan(startdir=None):
                 books = myDB.select(
                     'select AuthorName, BookName, BookFile, BookID from books where Status="Open"')
             else:
-                books = myDB.select(
-                    'select AuthorName, BookName, BookFile, BookID from books where Status="Open"' + \
-                    ' and BookFile like "' + startdir + '%"')
+                books = myDB.select('select AuthorName, BookName, BookFile, BookID from books where Status="Open"' +
+                                    ' and BookFile like "' + startdir + '%"')
 
             status = lazylibrarian.NOTFOUND_STATUS
             logger.info('Missing books will be marked as %s' % status)
@@ -526,7 +529,7 @@ def LibraryScan(startdir=None):
                                         if not check_exist_author:
                                             logger.info("Adding new author [%s]" % author)
                                             try:
-                                                addAuthorToDB(author, refresh=False)
+                                                addAuthorToDB(author, False)
                                                 check_exist_author = myDB.match(
                                                     'SELECT * FROM authors where AuthorName="%s"' %
                                                     author.replace('"', '""'))
@@ -536,6 +539,8 @@ def LibraryScan(startdir=None):
                             # check author exists in db, either newly loaded or already there
                             if not check_exist_author:
                                 logger.debug("Failed to match author [%s] in database" % author)
+                                if not lazylibrarian.ADD_AUTHOR:
+                                    logger.debug("Add authors to database is disabled")
                             else:
                                 # author exists, check if this book by this author is in our database
                                 # metadata might have quotes in book name

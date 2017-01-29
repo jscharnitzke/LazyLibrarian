@@ -24,7 +24,8 @@ import urllib2
 
 import lazylibrarian
 import lib.simplejson as simplejson
-from lazylibrarian import logger
+from lazylibrarian import logger, version
+from lazylibrarian.common import USER_AGENT
 
 
 #
@@ -78,29 +79,32 @@ def runGit(args):
 
 
 def getInstallType():
-
+    # need a way of detecting if we are running a windows .exe file
+    # (which we can't upgrade)  rather than just running git or source on windows
+    # We use a string in the version.py file for this
+    # FUTURE:   Add a version number string in this file too?
     try:
-        if platform.system().lower() == 'windows':
-            lazylibrarian.INSTALL_TYPE = 'win'
-            lazylibrarian.GIT_BRANCH = 'Windows'
-            logger.debug('(getInstallType) [Windows] install detected. Setting Branch to [%s]' %
-                         lazylibrarian.GIT_BRANCH)
-    except Exception:
-        if os.path.isdir(os.path.join(lazylibrarian.PROG_DIR, '.git')):
-            lazylibrarian.INSTALL_TYPE = 'git'
-            lazylibrarian.GIT_BRANCH = getCurrentGitBranch()
-            logger.debug('(getInstallType) [GIT] install detected. Setting Branch to [%s] ' %
-                         lazylibrarian.GIT_BRANCH)
-        elif os.path.exists(os.path.join(lazylibrarian.PROG_DIR, '.package')):
-            lazylibrarian.INSTALL_TYPE = 'package'
-            lazylibrarian.GIT_BRANCH = 'Package'
-            logger.debug('(getInstallType) [Package] install detected. Setting Branch to [%s] ' %
-                         lazylibrarian.GIT_BRANCH)
-        else:
-            lazylibrarian.INSTALL_TYPE = 'source'
-            lazylibrarian.GIT_BRANCH = 'master'
-            logger.debug('(getInstallType) [Source]install detected. Setting Branch to [%s]' %
-                         lazylibrarian.GIT_BRANCH)
+        install = version.LAZYLIBRARIAN_VERSION.lower()
+    except:
+        install = 'unknown'
+
+    if install in ['windows', 'win32build']:
+        lazylibrarian.INSTALL_TYPE = 'win'
+        lazylibrarian.CURRENT_BRANCH = 'Windows'
+
+    elif install == 'package':  # deb, rpm, other non-upgradeable
+        lazylibrarian.INSTALL_TYPE = 'package'
+        lazylibrarian.GIT_BRANCH = 'Package'
+
+    elif os.path.isdir(os.path.join(lazylibrarian.PROG_DIR, '.git')):
+        lazylibrarian.INSTALL_TYPE = 'git'
+        lazylibrarian.GIT_BRANCH = getCurrentGitBranch()
+    else:
+        lazylibrarian.INSTALL_TYPE = 'source'
+        lazylibrarian.GIT_BRANCH = 'master'
+
+    logger.debug('(getInstallType) [%s] install detected. Setting Branch to [%s]' %
+                 (lazylibrarian.INSTALL_TYPE, lazylibrarian.GIT_BRANCH))
 
 #
 # Establish the version of the installed app for Source or GIT only
@@ -236,7 +240,10 @@ def getLatestVersion_FromGit():
             logger.debug(
                 '(getLatestVersion_FromGit) Retrieving latest version information from github command=[%s]' % url)
             try:
-                result = urllib2.urlopen(url, timeout=30).read()
+                request = urllib2.Request(url)
+                request.add_header('User-Agent', USER_AGENT)
+                resp = urllib2.urlopen(request, timeout=30)
+                result = resp.read()
                 git = simplejson.JSONDecoder().decode(result)
                 latest_version = git['sha']
                 logger.debug('(getLatestVersion_FromGit) Branch [%s] Latest Version has been set to [%s]' % (
@@ -270,8 +277,10 @@ def getCommitDifferenceFromGit():
         logger.debug('(getCommitDifferenceFromGit) -  Check for differences between local & repo by [%s]' % url)
 
         try:
-            result = urllib2.urlopen(url, timeout=30).read()
-
+            request = urllib2.Request(url)
+            request.add_header('User-Agent', USER_AGENT)
+            resp = urllib2.urlopen(request, timeout=30)
+            result = resp.read()
             try:
                 logger.debug('JSONDecode url')
                 git = simplejson.JSONDecoder().decode(result)
@@ -371,7 +380,10 @@ def update():
 
         try:
             logger.info('(update) Downloading update from: ' + tar_download_url)
-            data = urllib2.urlopen(tar_download_url, timeout=30)
+            request = urllib2.Request(tar_download_url)
+            request.add_header('User-Agent', USER_AGENT)
+            resp = urllib2.urlopen(request, timeout=30)
+            data = resp.read()
         except socket.timeout:
             logger.error("(update) Timeout retrieving new version from " + tar_download_url)
             return

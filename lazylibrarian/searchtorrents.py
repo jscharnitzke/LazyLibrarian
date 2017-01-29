@@ -24,14 +24,14 @@ import urllib2
 from StringIO import StringIO
 from base64 import b16encode, b32decode
 from hashlib import sha1
+#from HTMLParser import HTMLParser
 
 import lazylibrarian
-from lazylibrarian import logger, database, utorrent, transmission, qbittorrent, deluge, rtorrent, synology
+from lazylibrarian import logger, database, utorrent, transmission, qbittorrent, deluge, rtorrent, synology, bencode
 from lazylibrarian.common import scheduleJob, USER_AGENT, setperm
 from lazylibrarian.formatter import plural, unaccented_str, replace_all, getList, check_int, now, cleanName
 from lazylibrarian.notifiers import notify_snatch
 from lazylibrarian.providers import IterateOverTorrentSites
-from lib.bencode import bencode as bencode, bdecode
 from lib.deluge_client import DelugeRPCClient
 from lib.fuzzywuzzy import fuzz
 from magnet2torrent import magnet2torrent
@@ -297,6 +297,12 @@ def TORDownloadMethod(bookid=None, tor_title=None, tor_url=None):
     if tor_url and tor_url.startswith('magnet'):
         torrent = tor_url  # allow magnet link to write to blackhole and hash to utorrent/rtorrent
     else:
+        # h = HTMLParser()
+        # tor_url = h.unescape(tor_url)
+        # HTMLParser is probably overkill, we only seem to get &amp;
+        #
+        tor_url = tor_url.replace('&amp;', '&')
+
         if '&file=' in tor_url:
             # torznab results need to be re-encoded
             # had a problem with torznab utf-8 encoded strings not matching
@@ -335,6 +341,9 @@ def TORDownloadMethod(bookid=None, tor_title=None, tor_url=None):
             return False
         except urllib2.URLError as e:
             logger.warn('Error fetching torrent from url: %s, %s' % (tor_url, e.reason))
+            return False
+        except ValueError as e:
+            logger.warn('Error, invalid url: [%s] %s' % (full_url, str(e)))
             return False
 
     if lazylibrarian.TOR_DOWNLOADER_BLACKHOLE:
@@ -479,7 +488,7 @@ def CalcTorrentHash(torrent):
         if len(hashid) == 32:
             hashid = b16encode(b32decode(hashid)).lower()
     else:
-        info = bdecode(torrent)["info"]
-        hashid = sha1(bencode(info)).hexdigest()
+        info = bencode.decode(torrent)["info"]
+        hashid = sha1(bencode.encode(info)).hexdigest()
     logger.debug('Torrent Hash: ' + hashid)
     return hashid

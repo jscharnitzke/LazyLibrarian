@@ -61,7 +61,7 @@ COMMIT_LIST = None
 
 DATADIR = None
 DBFILE = None
-UPDATE_MSG = None
+UPDATE_MSG = ''
 CONFIGFILE = ''
 CFG = ''
 CURRENT_TAB = '1'
@@ -156,6 +156,7 @@ TOR_DOWNLOADER_DELUGE = 0
 NUMBEROFSEEDERS = 10
 KEEP_SEEDING = 0
 TORRENT_DIR = None
+PREFER_MAGNET = 0
 
 RTORRENT_HOST = None
 RTORRENT_USER = None
@@ -232,6 +233,7 @@ EBOOK_DEST_FILE = None
 MAG_DEST_FOLDER = None
 MAG_DEST_FILE = None
 MAG_RELATIVE = 1
+MAG_SINGLE = 1
 
 USE_TWITTER = 0
 TWITTER_NOTIFY_ONSNATCH = 0
@@ -446,7 +448,11 @@ def initialize():
             else:
                 myDB = database.DBConnection()
                 result = myDB.match('PRAGMA user_version')
-                logger.info("Database is version %s" % result[0])
+                if result:
+                    version = result[0]
+                else:
+                    version = 0
+                logger.info("Database is version %s" % version)
 
         except Exception as e:
             logger.error("Can't connect to the database: %s" % str(e))
@@ -474,7 +480,7 @@ def config_read(reloaded=False):
         KAT, KAT_HOST, TPB, TPB_HOST, ZOO, ZOO_HOST, TDL, TDL_HOST, GEN, GEN_HOST, EXTRA, EXTRA_HOST, \
         LIME, LIME_HOST, NEWZNAB_PROV, TORZNAB_PROV, RSS_PROV, REJECT_WORDS, REJECT_MAXSIZE, REJECT_MAGSIZE, \
         VERSIONCHECK_INTERVAL, SEARCH_INTERVAL, SCAN_INTERVAL, SEARCHRSS_INTERVAL, MAG_AGE, \
-        EBOOK_DEST_FOLDER, EBOOK_DEST_FILE, MAG_RELATIVE, MAG_DEST_FOLDER, MAG_DEST_FILE, \
+        EBOOK_DEST_FOLDER, EBOOK_DEST_FILE, MAG_RELATIVE, MAG_DEST_FOLDER, MAG_DEST_FILE, MAG_SINGLE, \
         USE_TWITTER, TWITTER_NOTIFY_ONSNATCH, TWITTER_NOTIFY_ONDOWNLOAD, \
         TWITTER_USERNAME, TWITTER_PASSWORD, TWITTER_PREFIX, TOR_CONVERT_MAGNET, \
         USE_BOXCAR, BOXCAR_NOTIFY_ONSNATCH, BOXCAR_NOTIFY_ONDOWNLOAD, BOXCAR_TOKEN, \
@@ -495,7 +501,7 @@ def config_read(reloaded=False):
         TOR_DOWNLOADER_SYNOLOGY, TOR_DOWNLOADER_DELUGE, DELUGE_HOST, DELUGE_USER, DELUGE_PASS, DELUGE_PORT, \
         DELUGE_LABEL, FULL_SCAN, ADD_AUTHOR, NOTFOUND_STATUS, NEWBOOK_STATUS, NEWAUTHOR_STATUS, \
         USE_NMA, NMA_APIKEY, NMA_PRIORITY, NMA_ONSNATCH, NMA_ONDOWNLOAD, \
-        GIT_USER, GIT_REPO, GIT_BRANCH, INSTALL_TYPE, CURRENT_VERSION, COMMIT_LIST, \
+        GIT_USER, GIT_REPO, GIT_BRANCH, INSTALL_TYPE, CURRENT_VERSION, COMMIT_LIST, PREFER_MAGNET, \
         LATEST_VERSION, COMMITS_BEHIND, NUMBEROFSEEDERS, KEEP_SEEDING, SCHED, CACHE_HIT, CACHE_MISS, \
         BOOKSTRAP_THEME, LOGFILES, LOGSIZE, HTTPS_ENABLED, HTTPS_CERT, HTTPS_KEY
 
@@ -527,6 +533,7 @@ def config_read(reloaded=False):
     HTTPS_CERT = check_setting_str(CFG, 'General', 'https_cert', '')
     HTTPS_KEY = check_setting_str(CFG, 'General', 'https_key', '')
     BOOKSTRAP_THEME = check_setting_str(CFG, 'General', 'bookstrap_theme', 'slate')
+    MAG_SINGLE = check_setting_bool(CFG, 'General', 'mag_single', 1)
 
     LAUNCH_BROWSER = check_setting_bool(CFG, 'General', 'launch_browser', 1)
     API_ENABLED = check_setting_bool(CFG, 'General', 'api_enabled', 0)
@@ -707,6 +714,7 @@ def config_read(reloaded=False):
     NUMBEROFSEEDERS = check_setting_int(CFG, 'TORRENT', 'numberofseeders', 10)
     TOR_DOWNLOADER_DELUGE = check_setting_bool(CFG, 'TORRENT', 'tor_downloader_deluge', 0)
     KEEP_SEEDING = check_setting_bool(CFG, 'TORRENT', 'keep_seeding', 1)
+    PREFER_MAGNET = check_setting_bool(CFG, 'TORRENT', 'prefer_magnet', 1)
     TORRENT_DIR = check_setting_str(CFG, 'TORRENT', 'torrent_dir', '')
 
     RTORRENT_HOST = check_setting_str(CFG, 'RTORRENT', 'rtorrent_host', '')
@@ -948,6 +956,7 @@ def config_write():
     CFG.set('General', 'cache_age', CACHE_AGE)
     CFG.set('General', 'task_age', TASK_AGE)
     CFG.set('General', 'destination_copy', DESTINATION_COPY)
+    CFG.set('General', 'mag_single', MAG_SINGLE)
     #
     CFG.set('General', 'displaylength', DISPLAYLENGTH)
     #
@@ -1063,6 +1072,7 @@ def config_write():
     CFG.set('TORRENT', 'numberofseeders', NUMBEROFSEEDERS)
     CFG.set('TORRENT', 'torrent_dir', TORRENT_DIR)
     CFG.set('TORRENT', 'keep_seeding', KEEP_SEEDING)
+    CFG.set('TORRENT', 'prefer_magnet', PREFER_MAGNET)
     #
     check_section('RTORRENT')
     CFG.set('RTORRENT', 'rtorrent_host', RTORRENT_HOST)
@@ -1220,16 +1230,23 @@ def config_write():
 
     with open(CONFIGFILE + '.new', 'wb') as configfile:
         CFG.write(configfile)
+
     try:
         os.remove(CONFIGFILE + '.bak')
     except OSError as e:
         if e.errno is not 2:  # doesn't exist is ok
-            logger.debug("Error deleting backup %s, %s" % (CONFIGFILE + '.bak', e.strerror))
+            logger.debug('{} {}{} {}'.format('Error deleting backup file:', CONFIGFILE, '.bak', e.strerror))
+
     try:
         os.rename(CONFIGFILE, CONFIGFILE + '.bak')
+    except OSError as e:
+        if e.errno is not 2:  # doesn't exist is ok as wouldn't exist until first save
+            logger.debug('{} {} {}'.format('Unable to backup config file:', CONFIGFILE, e.strerror))
+
+    try:
         os.rename(CONFIGFILE + '.new', CONFIGFILE)
     except OSError as e:
-        logger.debug("Unable to backup config file: %s" % str(e))
+        logger.debug('{} {} {}'.format('Unable to create new config file:', CONFIGFILE, e.strerror))
 
 
 def add_newz_slot():
@@ -1503,7 +1520,13 @@ def db_needs_upgrade():
 
     myDB = database.DBConnection()
     result = myDB.match('PRAGMA user_version')
-    db_version = result[0]
+    # Had a report of "index out of range", can't replicate it.
+    # Maybe on some versions of sqlite an unset user_version
+    # or unsupported pragma gives an empty result?
+    if result:
+        db_version = result[0]
+    else:
+        db_version = 0
 
     # database version history:
     # 0 original version or new empty database
@@ -1516,8 +1539,11 @@ def db_needs_upgrade():
     # 7 added Source and DownloadID to wanted table for download monitoring
     # 8 move image cache from data/images/cache into datadir
     # 9 add regex to magazine table
+    # 10 check for missing columns in pastissues table
+    # 11 Keep most recent book image in author table
+    # 12 Keep latest issue cover in magazine table
 
-    db_current_version = 9
+    db_current_version = 12
     if db_version < db_current_version:
         return db_current_version
     return 0
